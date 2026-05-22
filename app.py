@@ -122,6 +122,7 @@ end_str   = end_date.strftime("%Y-%m-%d")
 if 'analysis_done' not in st.session_state:
     st.session_state.analysis_done = False
     st.session_state.df = None
+    st.session_state.median_ndvi = None
 
 # Har safar yangi tahlil qilish
 with st.spinner("🛰️ GEE ma'lumotlari yuklanmoqda..."):
@@ -149,10 +150,11 @@ with st.spinner("🛰️ GEE ma'lumotlari yuklanmoqda..."):
             lat, lon = DISTRICT_COORDS.get(dist, (41.5, 60.5))
             point = ee.Geometry.Point([lon, lat])
             try:
+                # XOTIRA TEJASH: buffer 15000 -> 5000, scale 20 -> 100
                 val = median_ndvi.reduceRegion(
                     reducer=ee.Reducer.mean(),
-                    geometry=point.buffer(15000),
-                    scale=20,
+                    geometry=point.buffer(5000),
+                    scale=100,
                     maxPixels=1e9,
                 ).getInfo().get("NDVI")
             except Exception as e:
@@ -163,6 +165,7 @@ with st.spinner("🛰️ GEE ma'lumotlari yuklanmoqda..."):
 
         df = pd.DataFrame(results)
         st.session_state.df = df
+        st.session_state.median_ndvi = median_ndvi
         st.session_state.analysis_done = True
 
     except Exception as e:
@@ -171,6 +174,7 @@ with st.spinner("🛰️ GEE ma'lumotlari yuklanmoqda..."):
 
 # Session state dan o'qish
 df = st.session_state.df
+median_ndvi = st.session_state.median_ndvi
 
 # Metrikalar
 st.markdown("## 📊 Umumiy Ko'rsatkichlar")
@@ -201,12 +205,19 @@ try:
 except Exception as e:
     st.warning(f"NDVI xarita qatlami yuklanmadi: {e}")
 
-# Markerlar qo'shish
+# Markerlar qo'shish - None qiymatlar uchun tekshirish
 for _, row in df.iterrows():
-    color = "red" if row["NDVI"] and row["NDVI"] < 0.15 else "orange" if row["NDVI"] and row["NDVI"] < 0.35 else "green"
+    color = "red" if row["NDVI"] is not None and row["NDVI"] < 0.15 else "orange" if row["NDVI"] is not None and row["NDVI"] < 0.35 else "green"
+
+    # Popup matnini xavfsiz yaratish
+    if row["NDVI"] is not None:
+        popup_text = f"<b>{row['Tuman']}</b><br>NDVI: {row['NDVI']:.3f}<br>{ndvi_class(row['NDVI'])}"
+    else:
+        popup_text = f"<b>{row['Tuman']}</b><br>NDVI: Aniqlanmadi"
+
     folium.Marker(
         location=[row["Lat"], row["Lon"]],
-        popup=f"<b>{row['Tuman']}</b><br>NDVI: {row['NDVI']:.3f}<br>{ndvi_class(row['NDVI'])}",
+        popup=popup_text,
         icon=folium.Icon(color=color, icon="leaf", prefix="fa")
     ).add_to(m)
 
