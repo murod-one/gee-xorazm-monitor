@@ -1,6 +1,0 @@
-earthengine-api>=0.1.380
-streamlit
-folium
-streamlit-folium
-pandas
-numpy
