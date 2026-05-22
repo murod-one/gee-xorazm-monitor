@@ -2,17 +2,9 @@ import streamlit as st
 import ee
 import pandas as pd
 import json
+import folium
+from streamlit_folium import st_folium
 from datetime import date
-
-# geemap importini shartli qilish
-try:
-    import geemap.foliumap as geemap
-    USE_GEEMAP = True
-except Exception as e:
-    st.warning(f"geemap yuklanmadi: {e}. Folium bilan davom etamiz.")
-    import folium
-    from streamlit_folium import st_folium
-    USE_GEEMAP = False
 
 st.set_page_config(
     page_title="Xorazm Meliorativ Monitoring",
@@ -77,13 +69,27 @@ def ndvi_class(val):
     else:
         return "🟢 Yaxshi"
 
+# Folium uchun GEE layer qo'shish funksiyasi
+def add_ee_layer(self, ee_image_object, vis_params, name):
+    """Adds Earth Engine image tiles to folium map."""
+    map_id_dict = ee.Image(ee_image_object).getMapId(vis_params)
+    folium.raster_layers.TileLayer(
+        tiles=map_id_dict['tile_fetcher'].url_format,
+        attr='Google Earth Engine',
+        name=name,
+        overlay=True,
+        control=True
+    ).add_to(self)
+
+folium.Map.add_ee_layer = add_ee_layer
+
 with st.sidebar:
     st.markdown("## 🌿 Boshqaruv Paneli")
     st.markdown("---")
     st.markdown("### 📅 Vaqt oralig'i")
     col1, col2 = st.columns(2)
     with col1:
-        start_date = st.date_input("Boshlanish", value=date(2026, 1, 1))
+        start_date = st.date_input("Boshlanish", value=date(2025, 1, 1))
     with col2:
         end_date = st.date_input("Tugash", value=date.today())
     st.markdown("### 🏘️ Tumanlar")
@@ -91,7 +97,7 @@ with st.sidebar:
         "Tanlang", DISTRICTS,
         default=["Urganch", "Xiva", "Gurlan"],
     )
-    cloud_pct = st.slider("☁️ Bulutlilik (%)", 0, 100, 20)
+    cloud_pct = st.slider("☁️ Bulutlilik (%)", 0, 100, 50)
     run_btn = st.button("▶ Tahlil boshlash", use_container_width=True)
 
 st.markdown("# 🌱 Xorazm Viloyati — Meliorativ Holat Monitoringi")
@@ -116,61 +122,55 @@ end_str   = end_date.strftime("%Y-%m-%d")
 if 'analysis_done' not in st.session_state:
     st.session_state.analysis_done = False
     st.session_state.df = None
-    st.session_state.median_ndvi = None
 
-if not st.session_state.analysis_done or st.session_state.get('last_params') != (start_str, end_str, tuple(selected_districts), cloud_pct):
+# Har safar yangi tahlil qilish
+with st.spinner("🛰️ GEE ma'lumotlari yuklanmoqda..."):
+    try:
+        s2 = (
+            ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+            .filterDate(start_str, end_str)
+            .filterBounds(ee.Geometry.BBox(59.5, 41.0, 61.5, 42.2))
+            .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", cloud_pct))
+            .map(lambda img: img.normalizedDifference(["B8", "B4"]).rename("NDVI")
+                                .copyProperties(img, ["system:time_start"]))
+        )
 
-    with st.spinner("🛰️ GEE ma'lumotlari yuklanmoqda..."):
-        try:
-            s2 = (
-                ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
-                .filterDate(start_str, end_str)
-                .filterBounds(ee.Geometry.BBox(59.5, 41.0, 61.5, 42.2))
-                .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", cloud_pct))
-                .map(lambda img: img.normalizedDifference(["B8", "B4"]).rename("NDVI")
-                                    .copyProperties(img, ["system:time_start"]))
-            )
+        count = s2.size().getInfo()
+        st.write(f"📡 {count} ta Sentinel-2 tasviri topildi")
 
-            # Tekshirish - bo'sh kolleksiya
-            count = s2.size().getInfo()
-            if count == 0:
-                st.error(f"❌ {start_str} dan {end_str} gacha Sentinel-2 ma'lumotlari topilmadi. Vaqt oralig'ini kengaytiring yoki bulutlilik chegarasini oshiring.")
-                st.stop()
-
-            median_ndvi = s2.median()
-
-            results = []
-            for dist in selected_districts:
-                lat, lon = DISTRICT_COORDS.get(dist, (41.5, 60.5))
-                point = ee.Geometry.Point([lon, lat])
-                try:
-                    val = median_ndvi.reduceRegion(
-                        reducer=ee.Reducer.mean(),
-                        geometry=point.buffer(15000),
-                        scale=20,
-                        maxPixels=1e9,
-                    ).getInfo().get("NDVI")
-                except Exception as e:
-                    st.warning(f"{dist} uchun NDVI olinmadi: {e}")
-                    val = None
-                results.append({"Tuman": dist, "NDVI": round(val, 4) if val else None,
-                                 "Lat": lat, "Lon": lon})
-
-            df = pd.DataFrame(results)
-
-            # Session state ga saqlash
-            st.session_state.df = df
-            st.session_state.median_ndvi = median_ndvi
-            st.session_state.analysis_done = True
-            st.session_state.last_params = (start_str, end_str, tuple(selected_districts), cloud_pct)
-
-        except Exception as e:
-            st.error(f"❌ Tahlil qilishda xato: {e}")
+        if count == 0:
+            st.error(f"❌ {start_str} dan {end_str} gacha ma'lumotlar topilmadi. Vaqt oralig'ini kengaytiring yoki bulutlilik chegarasini oshiring.")
             st.stop()
+
+        median_ndvi = s2.median()
+
+        results = []
+        for dist in selected_districts:
+            lat, lon = DISTRICT_COORDS.get(dist, (41.5, 60.5))
+            point = ee.Geometry.Point([lon, lat])
+            try:
+                val = median_ndvi.reduceRegion(
+                    reducer=ee.Reducer.mean(),
+                    geometry=point.buffer(15000),
+                    scale=20,
+                    maxPixels=1e9,
+                ).getInfo().get("NDVI")
+            except Exception as e:
+                st.warning(f"{dist} uchun NDVI olinmadi: {e}")
+                val = None
+            results.append({"Tuman": dist, "NDVI": round(val, 4) if val else None,
+                             "Lat": lat, "Lon": lon})
+
+        df = pd.DataFrame(results)
+        st.session_state.df = df
+        st.session_state.analysis_done = True
+
+    except Exception as e:
+        st.error(f"❌ Tahlil qilishda xato: {e}")
+        st.stop()
 
 # Session state dan o'qish
 df = st.session_state.df
-median_ndvi = st.session_state.median_ndvi
 
 # Metrikalar
 st.markdown("## 📊 Umumiy Ko'rsatkichlar")
@@ -183,43 +183,37 @@ c4.metric("🔴 Muammoli tumanlar", int((valid < 0.15).sum()))
 
 st.markdown("---")
 
-# Xarita
+# Xarita - Folium bilan
 st.markdown("## 🗺️ Interaktiv Xarita")
 
-if USE_GEEMAP and median_ndvi is not None:
-    try:
-        Map = geemap.Map(center=[41.55, 60.63], zoom=9)
-        Map.add_basemap("HYBRID")
-        ndvi_vis = {
-            "min": -0.1, "max": 0.7,
-            "palette": ["#d73027","#fc8d59","#fee08b","#d9ef8b","#91cf60","#1a9850"],
-        }
-        Map.addLayer(
-            median_ndvi.clip(ee.Geometry.BBox(59.5, 41.0, 61.5, 42.2)),
-            ndvi_vis, "NDVI (Sentinel-2)"
-        )
-        for _, row in df.iterrows():
-            ndvi_str = f"{row['NDVI']:.3f}" if row["NDVI"] else "—"
-            Map.add_marker(
-                location=[row["Lat"], row["Lon"]],
-                popup=f"<b>{row['Tuman']}</b><br>NDVI: {ndvi_str}<br>{ndvi_class(row['NDVI'])}",
-            )
-        Map.to_streamlit(height=500)
-    except Exception as e:
-        st.warning(f"geemap xarita yuklanmadi: {e}")
-        USE_GEEMAP = False
+m = folium.Map(location=[41.55, 60.63], zoom_start=9, tiles="OpenStreetMap")
 
-if not USE_GEEMAP:
-    # Folium bilan zaxira variant
-    m = folium.Map(location=[41.55, 60.63], zoom_start=9, tiles="OpenStreetMap")
-    for _, row in df.iterrows():
-        color = "red" if row["NDVI"] and row["NDVI"] < 0.15 else "orange" if row["NDVI"] and row["NDVI"] < 0.35 else "green"
-        folium.Marker(
-            location=[row["Lat"], row["Lon"]],
-            popup=f"{row['Tuman']}: NDVI={row['NDVI']:.3f}" if row["NDVI"] else f"{row['Tuman']}: N/A",
-            icon=folium.Icon(color=color)
-        ).add_to(m)
-    st_folium(m, width=700, height=500)
+# NDVI layer qo'shish
+try:
+    ndvi_vis = {
+        "min": -0.1, "max": 0.7,
+        "palette": ["#d73027","#fc8d59","#fee08b","#d9ef8b","#91cf60","#1a9850"],
+    }
+    m.add_ee_layer(
+        median_ndvi.clip(ee.Geometry.BBox(59.5, 41.0, 61.5, 42.2)),
+        ndvi_vis, "NDVI (Sentinel-2)"
+    )
+except Exception as e:
+    st.warning(f"NDVI xarita qatlami yuklanmadi: {e}")
+
+# Markerlar qo'shish
+for _, row in df.iterrows():
+    color = "red" if row["NDVI"] and row["NDVI"] < 0.15 else "orange" if row["NDVI"] and row["NDVI"] < 0.35 else "green"
+    folium.Marker(
+        location=[row["Lat"], row["Lon"]],
+        popup=f"<b>{row['Tuman']}</b><br>NDVI: {row['NDVI']:.3f}<br>{ndvi_class(row['NDVI'])}",
+        icon=folium.Icon(color=color, icon="leaf", prefix="fa")
+    ).add_to(m)
+
+# Layer control
+folium.LayerControl().add_to(m)
+
+st_folium(m, width=700, height=500)
 
 # Jadval
 st.markdown("## 📋 Tuman Ma'lumotlari")
