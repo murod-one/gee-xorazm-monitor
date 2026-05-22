@@ -5,5 +5,3 @@ folium
 streamlit-folium
 pandas
 numpy
-matplotlib
-Pillow
