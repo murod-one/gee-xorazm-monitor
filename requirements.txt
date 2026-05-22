@@ -1,8 +1,7 @@
 earthengine-api
 streamlit
-geemap
+geemap==0.29.6
 folium
 streamlit-folium
 pandas
 numpy
-python-box==6.1.0
