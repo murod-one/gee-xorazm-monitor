@@ -1,9 +1,18 @@
 import streamlit as st
 import ee
-import geemap.foliumap as geemap
 import pandas as pd
 import json
 from datetime import date
+
+# geemap importini shartli qilish
+try:
+    import geemap.foliumap as geemap
+    USE_GEEMAP = True
+except Exception as e:
+    st.warning(f"geemap yuklanmadi: {e}. Folium bilan davom etamiz.")
+    import folium
+    from streamlit_folium import st_folium
+    USE_GEEMAP = False
 
 st.set_page_config(
     page_title="Xorazm Meliorativ Monitoring",
@@ -23,7 +32,8 @@ def init_gee():
     try:
         key_data = dict(st.secrets["earth_engine"])
         if "private_key" in key_data:
-            key_data["private_key"] = key_data["private_key"].replace("\\n", "\n")
+            key_data["private_key"] = key_data["private_key"].replace("\n", "
+")
         key_data["type"] = "service_account"
         credentials = ee.ServiceAccountCredentials(
             email=key_data["client_email"],
@@ -39,7 +49,7 @@ gee_ok = init_gee()
 
 DISTRICTS = [
     "Urganch", "Xiva", "Shovot", "Bog'ot", "Gurlan",
-    "Xonqa", "Qo'shko'pir", "Yangibozor", "Hazorasp",
+    "Xonqa", "Q'oshko'pir", "Yangibozor", "Hazorasp",
     "Yangiariq", "Tuproqqal'a", "Pitnak",
 ]
 
@@ -50,7 +60,7 @@ DISTRICT_COORDS = {
     "Bog'ot":       (41.350, 60.183),
     "Gurlan":       (41.850, 60.383),
     "Xonqa":        (41.533, 60.800),
-    "Qo'shko'pir":  (41.483, 60.167),
+    "Q'oshko'pir":  (41.483, 60.167),
     "Yangibozor":   (41.733, 60.550),
     "Hazorasp":     (41.317, 61.067),
     "Yangiariq":    (41.700, 60.700),
@@ -145,23 +155,36 @@ st.markdown("---")
 
 # Xarita
 st.markdown("## 🗺️ Interaktiv Xarita")
-Map = geemap.Map(center=[41.55, 60.63], zoom=9)
-Map.add_basemap("HYBRID")
-ndvi_vis = {
-    "min": -0.1, "max": 0.7,
-    "palette": ["#d73027","#fc8d59","#fee08b","#d9ef8b","#91cf60","#1a9850"],
-}
-Map.addLayer(
-    median_ndvi.clip(ee.Geometry.BBox(59.5, 41.0, 61.5, 42.2)),
-    ndvi_vis, "NDVI (Sentinel-2)"
-)
-for _, row in df.iterrows():
-    ndvi_str = f"{row['NDVI']:.3f}" if row["NDVI"] else "—"
-    Map.add_marker(
-        location=[row["Lat"], row["Lon"]],
-        popup=f"<b>{row['Tuman']}</b><br>NDVI: {ndvi_str}<br>{ndvi_class(row['NDVI'])}",
+
+if USE_GEEMAP:
+    Map = geemap.Map(center=[41.55, 60.63], zoom=9)
+    Map.add_basemap("HYBRID")
+    ndvi_vis = {
+        "min": -0.1, "max": 0.7,
+        "palette": ["#d73027","#fc8d59","#fee08b","#d9ef8b","#91cf60","#1a9850"],
+    }
+    Map.addLayer(
+        median_ndvi.clip(ee.Geometry.BBox(59.5, 41.0, 61.5, 42.2)),
+        ndvi_vis, "NDVI (Sentinel-2)"
     )
-Map.to_streamlit(height=500)
+    for _, row in df.iterrows():
+        ndvi_str = f"{row['NDVI']:.3f}" if row["NDVI"] else "—"
+        Map.add_marker(
+            location=[row["Lat"], row["Lon"]],
+            popup=f"<b>{row['Tuman']}</b><br>NDVI: {ndvi_str}<br>{ndvi_class(row['NDVI'])}",
+        )
+    Map.to_streamlit(height=500)
+else:
+    # Folium bilan zaxira variant
+    m = folium.Map(location=[41.55, 60.63], zoom_start=9, tiles="OpenStreetMap")
+    for _, row in df.iterrows():
+        color = "red" if row["NDVI"] and row["NDVI"] < 0.15 else "orange" if row["NDVI"] and row["NDVI"] < 0.35 else "green"
+        folium.Marker(
+            location=[row["Lat"], row["Lon"]],
+            popup=f"{row['Tuman']}: NDVI={row['NDVI']:.3f}" if row["NDVI"] else f"{row['Tuman']}: N/A",
+            icon=folium.Icon(color=color)
+        ).add_to(m)
+    st_folium(m, width=700, height=500)
 
 # Jadval
 st.markdown("## 📋 Tuman Ma'lumotlari")
