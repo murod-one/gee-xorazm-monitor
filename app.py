@@ -4,7 +4,7 @@ import pandas as pd
 import json
 from datetime import date
 
-# geemap.foliumap ni shartli import qilish
+# geemap ni shartli import
 try:
     import geemap.foliumap as geemap
     USE_GEEMAP = True
@@ -173,7 +173,7 @@ c4.metric("🔴 Muammoli tumanlar", int((valid < 0.15).sum()))
 
 st.markdown("---")
 
-# Xarita - geemap.foliumap bilan
+# Xarita - geemap bilan
 st.markdown("## 🗺️ Interaktiv Xarita")
 
 if USE_GEEMAP and median_ndvi is not None:
