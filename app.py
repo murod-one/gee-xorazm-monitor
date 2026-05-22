@@ -32,8 +32,7 @@ def init_gee():
     try:
         key_data = dict(st.secrets["earth_engine"])
         if "private_key" in key_data:
-            key_data["private_key"] = key_data["private_key"].replace("\n", "
-")
+            key_data["private_key"] = key_data["private_key"].replace(r"\n", "\n")
         key_data["type"] = "service_account"
         credentials = ee.ServiceAccountCredentials(
             email=key_data["client_email"],
@@ -49,7 +48,7 @@ gee_ok = init_gee()
 
 DISTRICTS = [
     "Urganch", "Xiva", "Shovot", "Bog'ot", "Gurlan",
-    "Xonqa", "Q'oshko'pir", "Yangibozor", "Hazorasp",
+    "Xonqa", "Qo'shko'pir", "Yangibozor", "Hazorasp",
     "Yangiariq", "Tuproqqal'a", "Pitnak",
 ]
 
@@ -60,7 +59,7 @@ DISTRICT_COORDS = {
     "Bog'ot":       (41.350, 60.183),
     "Gurlan":       (41.850, 60.383),
     "Xonqa":        (41.533, 60.800),
-    "Q'oshko'pir":  (41.483, 60.167),
+    "Qo'shko'pir":  (41.483, 60.167),
     "Yangibozor":   (41.733, 60.550),
     "Hazorasp":     (41.317, 61.067),
     "Yangiariq":    (41.700, 60.700),
