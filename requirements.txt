@@ -1,5 +1,7 @@
 earthengine-api>=0.1.380
 streamlit
+setuptools>=68.0
+importlib_resources>=5.0
 geemap==0.32.0
 xyzservices>=2023.10.1
 folium
