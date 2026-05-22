@@ -24,7 +24,7 @@ def init_gee():
     try:
         key_data = dict(st.secrets["earth_engine"])
         if "private_key" in key_data:
-            key_data["private_key"] = key_data["private_key"].replace(r"\n", "
+            key_data["private_key"] = key_data["private_key"].replace("\\n", "
 ")
         key_data["type"] = "service_account"
         credentials = ee.ServiceAccountCredentials(
