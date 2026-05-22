@@ -1,8 +1,7 @@
-earthengine-api
 streamlit
-setuptools
-geemap
 folium
 streamlit-folium
+earthengine-api
+plotly
 pandas
 numpy
