@@ -1,8 +1,9 @@
-earthengine-api==0.1.390
-streamlit==1.35.0
-geemap==0.31.0
-folium==0.16.0
-streamlit-folium==0.20.0
-pandas==2.2.2
-numpy==1.26.4
-matplotlib==3.9.0
+earthengine-api
+streamlit
+geemap
+folium
+streamlit-folium
+pandas
+numpy
+matplotlib
+Pillow
