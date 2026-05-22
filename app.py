@@ -69,20 +69,6 @@ def ndvi_class(val):
     else:
         return "🟢 Yaxshi"
 
-# Folium uchun GEE layer qo'shish funksiyasi
-def add_ee_layer(self, ee_image_object, vis_params, name):
-    """Adds Earth Engine image tiles to folium map."""
-    map_id_dict = ee.Image(ee_image_object).getMapId(vis_params)
-    folium.raster_layers.TileLayer(
-        tiles=map_id_dict['tile_fetcher'].url_format,
-        attr='Google Earth Engine',
-        name=name,
-        overlay=True,
-        control=True
-    ).add_to(self)
-
-folium.Map.add_ee_layer = add_ee_layer
-
 with st.sidebar:
     st.markdown("## 🌿 Boshqaruv Paneli")
     st.markdown("---")
@@ -119,10 +105,10 @@ start_str = start_date.strftime("%Y-%m-%d")
 end_str   = end_date.strftime("%Y-%m-%d")
 
 # Session state da natijalarni saqlash
-if 'analysis_done' not in st.session_state:
-    st.session_state.analysis_done = False
+if 'df' not in st.session_state:
     st.session_state.df = None
     st.session_state.median_ndvi = None
+    st.session_state.count = 0
 
 # Har safar yangi tahlil qilish
 with st.spinner("🛰️ GEE ma'lumotlari yuklanmoqda..."):
@@ -140,7 +126,7 @@ with st.spinner("🛰️ GEE ma'lumotlari yuklanmoqda..."):
         st.write(f"📡 {count} ta Sentinel-2 tasviri topildi")
 
         if count == 0:
-            st.error(f"❌ {start_str} dan {end_str} gacha ma'lumotlar topilmadi. Vaqt oralig'ini kengaytiring yoki bulutlilik chegarasini oshiring.")
+            st.error(f"❌ {start_str} dan {end_str} gacha ma'lumotlar topilmadi.")
             st.stop()
 
         median_ndvi = s2.median()
@@ -150,7 +136,6 @@ with st.spinner("🛰️ GEE ma'lumotlari yuklanmoqda..."):
             lat, lon = DISTRICT_COORDS.get(dist, (41.5, 60.5))
             point = ee.Geometry.Point([lon, lat])
             try:
-                # XOTIRA TEJASH: buffer 15000 -> 5000, scale 20 -> 100
                 val = median_ndvi.reduceRegion(
                     reducer=ee.Reducer.mean(),
                     geometry=point.buffer(5000),
@@ -166,7 +151,7 @@ with st.spinner("🛰️ GEE ma'lumotlari yuklanmoqda..."):
         df = pd.DataFrame(results)
         st.session_state.df = df
         st.session_state.median_ndvi = median_ndvi
-        st.session_state.analysis_done = True
+        st.session_state.count = count
 
     except Exception as e:
         st.error(f"❌ Tahlil qilishda xato: {e}")
@@ -175,6 +160,7 @@ with st.spinner("🛰️ GEE ma'lumotlari yuklanmoqda..."):
 # Session state dan o'qish
 df = st.session_state.df
 median_ndvi = st.session_state.median_ndvi
+count = st.session_state.count
 
 # Metrikalar
 st.markdown("## 📊 Umumiy Ko'rsatkichlar")
@@ -198,22 +184,32 @@ try:
         "min": -0.1, "max": 0.7,
         "palette": ["#d73027","#fc8d59","#fee08b","#d9ef8b","#91cf60","#1a9850"],
     }
-    m.add_ee_layer(
-        median_ndvi.clip(ee.Geometry.BBox(59.5, 41.0, 61.5, 42.2)),
-        ndvi_vis, "NDVI (Sentinel-2)"
-    )
+    map_id_dict = ee.Image(median_ndvi).getMapId(ndvi_vis)
+    folium.raster_layers.TileLayer(
+        tiles=map_id_dict['tile_fetcher'].url_format,
+        attr='Google Earth Engine',
+        name='NDVI (Sentinel-2)',
+        overlay=True,
+        control=True
+    ).add_to(m)
 except Exception as e:
     st.warning(f"NDVI xarita qatlami yuklanmadi: {e}")
 
-# Markerlar qo'shish - None qiymatlar uchun tekshirish
+# Markerlar qo'shish
 for _, row in df.iterrows():
-    color = "red" if row["NDVI"] is not None and row["NDVI"] < 0.15 else "orange" if row["NDVI"] is not None and row["NDVI"] < 0.35 else "green"
-
-    # Popup matnini xavfsiz yaratish
-    if row["NDVI"] is not None:
-        popup_text = f"<b>{row['Tuman']}</b><br>NDVI: {row['NDVI']:.3f}<br>{ndvi_class(row['NDVI'])}"
-    else:
+    ndvi_val = row["NDVI"]
+    if ndvi_val is None:
+        color = "gray"
         popup_text = f"<b>{row['Tuman']}</b><br>NDVI: Aniqlanmadi"
+    elif ndvi_val < 0.15:
+        color = "red"
+        popup_text = f"<b>{row['Tuman']}</b><br>NDVI: {ndvi_val:.3f}<br>🔴 Yomon"
+    elif ndvi_val < 0.35:
+        color = "orange"
+        popup_text = f"<b>{row['Tuman']}</b><br>NDVI: {ndvi_val:.3f}<br>🟡 O'rtacha"
+    else:
+        color = "green"
+        popup_text = f"<b>{row['Tuman']}</b><br>NDVI: {ndvi_val:.3f}<br>🟢 Yaxshi"
 
     folium.Marker(
         location=[row["Lat"], row["Lon"]],
@@ -221,9 +217,7 @@ for _, row in df.iterrows():
         icon=folium.Icon(color=color, icon="leaf", prefix="fa")
     ).add_to(m)
 
-# Layer control
 folium.LayerControl().add_to(m)
-
 st_folium(m, width=700, height=500)
 
 # Jadval
@@ -231,7 +225,7 @@ st.markdown("## 📋 Tuman Ma'lumotlari")
 df["Holat"] = df["NDVI"].apply(ndvi_class)
 st.dataframe(df[["Tuman", "NDVI", "Holat"]], use_container_width=True, hide_index=True)
 
-# Grafik - streamlit native
+# Grafik
 st.markdown("## 📈 NDVI Taqqoslash")
 chart_df = df[["Tuman", "NDVI"]].set_index("Tuman")
 st.bar_chart(chart_df)
