@@ -1,6 +1,5 @@
 earthengine-api>=0.1.380
 streamlit
-geemap>=0.30.0
 folium
 streamlit-folium
 pandas
