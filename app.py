@@ -112,34 +112,65 @@ if not selected_districts:
 start_str = start_date.strftime("%Y-%m-%d")
 end_str   = end_date.strftime("%Y-%m-%d")
 
-with st.spinner("🛰️ GEE ma'lumotlari yuklanmoqda..."):
-    s2 = (
-        ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
-        .filterDate(start_str, end_str)
-        .filterBounds(ee.Geometry.BBox(59.5, 41.0, 61.5, 42.2))
-        .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", cloud_pct))
-        .map(lambda img: img.normalizedDifference(["B8", "B4"]).rename("NDVI")
-                            .copyProperties(img, ["system:time_start"]))
-    )
-    median_ndvi = s2.median()
+# Session state da natijalarni saqlash
+if 'analysis_done' not in st.session_state:
+    st.session_state.analysis_done = False
+    st.session_state.df = None
+    st.session_state.median_ndvi = None
 
-    results = []
-    for dist in selected_districts:
-        lat, lon = DISTRICT_COORDS.get(dist, (41.5, 60.5))
-        point = ee.Geometry.Point([lon, lat])
+if not st.session_state.analysis_done or st.session_state.get('last_params') != (start_str, end_str, tuple(selected_districts), cloud_pct):
+
+    with st.spinner("🛰️ GEE ma'lumotlari yuklanmoqda..."):
         try:
-            val = median_ndvi.reduceRegion(
-                reducer=ee.Reducer.mean(),
-                geometry=point.buffer(15000),
-                scale=20,
-                maxPixels=1e9,
-            ).getInfo().get("NDVI")
-        except Exception:
-            val = None
-        results.append({"Tuman": dist, "NDVI": round(val, 4) if val else None,
-                         "Lat": lat, "Lon": lon})
+            s2 = (
+                ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+                .filterDate(start_str, end_str)
+                .filterBounds(ee.Geometry.BBox(59.5, 41.0, 61.5, 42.2))
+                .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", cloud_pct))
+                .map(lambda img: img.normalizedDifference(["B8", "B4"]).rename("NDVI")
+                                    .copyProperties(img, ["system:time_start"]))
+            )
 
-    df = pd.DataFrame(results)
+            # Tekshirish - bo'sh kolleksiya
+            count = s2.size().getInfo()
+            if count == 0:
+                st.error(f"❌ {start_str} dan {end_str} gacha Sentinel-2 ma'lumotlari topilmadi. Vaqt oralig'ini kengaytiring yoki bulutlilik chegarasini oshiring.")
+                st.stop()
+
+            median_ndvi = s2.median()
+
+            results = []
+            for dist in selected_districts:
+                lat, lon = DISTRICT_COORDS.get(dist, (41.5, 60.5))
+                point = ee.Geometry.Point([lon, lat])
+                try:
+                    val = median_ndvi.reduceRegion(
+                        reducer=ee.Reducer.mean(),
+                        geometry=point.buffer(15000),
+                        scale=20,
+                        maxPixels=1e9,
+                    ).getInfo().get("NDVI")
+                except Exception as e:
+                    st.warning(f"{dist} uchun NDVI olinmadi: {e}")
+                    val = None
+                results.append({"Tuman": dist, "NDVI": round(val, 4) if val else None,
+                                 "Lat": lat, "Lon": lon})
+
+            df = pd.DataFrame(results)
+
+            # Session state ga saqlash
+            st.session_state.df = df
+            st.session_state.median_ndvi = median_ndvi
+            st.session_state.analysis_done = True
+            st.session_state.last_params = (start_str, end_str, tuple(selected_districts), cloud_pct)
+
+        except Exception as e:
+            st.error(f"❌ Tahlil qilishda xato: {e}")
+            st.stop()
+
+# Session state dan o'qish
+df = st.session_state.df
+median_ndvi = st.session_state.median_ndvi
 
 # Metrikalar
 st.markdown("## 📊 Umumiy Ko'rsatkichlar")
@@ -155,25 +186,30 @@ st.markdown("---")
 # Xarita
 st.markdown("## 🗺️ Interaktiv Xarita")
 
-if USE_GEEMAP:
-    Map = geemap.Map(center=[41.55, 60.63], zoom=9)
-    Map.add_basemap("HYBRID")
-    ndvi_vis = {
-        "min": -0.1, "max": 0.7,
-        "palette": ["#d73027","#fc8d59","#fee08b","#d9ef8b","#91cf60","#1a9850"],
-    }
-    Map.addLayer(
-        median_ndvi.clip(ee.Geometry.BBox(59.5, 41.0, 61.5, 42.2)),
-        ndvi_vis, "NDVI (Sentinel-2)"
-    )
-    for _, row in df.iterrows():
-        ndvi_str = f"{row['NDVI']:.3f}" if row["NDVI"] else "—"
-        Map.add_marker(
-            location=[row["Lat"], row["Lon"]],
-            popup=f"<b>{row['Tuman']}</b><br>NDVI: {ndvi_str}<br>{ndvi_class(row['NDVI'])}",
+if USE_GEEMAP and median_ndvi is not None:
+    try:
+        Map = geemap.Map(center=[41.55, 60.63], zoom=9)
+        Map.add_basemap("HYBRID")
+        ndvi_vis = {
+            "min": -0.1, "max": 0.7,
+            "palette": ["#d73027","#fc8d59","#fee08b","#d9ef8b","#91cf60","#1a9850"],
+        }
+        Map.addLayer(
+            median_ndvi.clip(ee.Geometry.BBox(59.5, 41.0, 61.5, 42.2)),
+            ndvi_vis, "NDVI (Sentinel-2)"
         )
-    Map.to_streamlit(height=500)
-else:
+        for _, row in df.iterrows():
+            ndvi_str = f"{row['NDVI']:.3f}" if row["NDVI"] else "—"
+            Map.add_marker(
+                location=[row["Lat"], row["Lon"]],
+                popup=f"<b>{row['Tuman']}</b><br>NDVI: {ndvi_str}<br>{ndvi_class(row['NDVI'])}",
+            )
+        Map.to_streamlit(height=500)
+    except Exception as e:
+        st.warning(f"geemap xarita yuklanmadi: {e}")
+        USE_GEEMAP = False
+
+if not USE_GEEMAP:
     # Folium bilan zaxira variant
     m = folium.Map(location=[41.55, 60.63], zoom_start=9, tiles="OpenStreetMap")
     for _, row in df.iterrows():
