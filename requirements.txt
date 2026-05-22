@@ -5,3 +5,4 @@ folium
 streamlit-folium
 pandas
 numpy
+python-box==6.1.0
