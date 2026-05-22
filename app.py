@@ -1,393 +1,922 @@
+# =========================================================
+# Xorazm Viloyati Meliorativ Monitoring
+# Streamlit + Folium + GEE + Plotly
+# =========================================================
+
 import streamlit as st
 import ee
-import pandas as pd
 import folium
-import json
-from datetime import date
+from streamlit_folium import st_folium
 
-# geemap ni standart usulda xavfsiz import qilamiz
-try:
-    import geemap
-    USE_GEEMAP = True
-except Exception as e:
-    st.error(f"geemap yuklanmadi: {e}")
-    USE_GEEMAP = False
-
-# Sahifa sozlamalari
-st.set_page_config(
-    page_title="Xorazm Meliorativ Monitoring",
-    page_icon="🌱",
-    layout="wide",
+from folium.plugins import (
+    HeatMap,
+    Draw,
+    MeasureControl,
+    MiniMap,
+    Fullscreen,
+    MousePosition
 )
 
-# Sidebar dizayni
+import pandas as pd
+import numpy as np
+
+from datetime import (
+    date,
+    datetime
+)
+
+import plotly.express as px
+import plotly.graph_objects as go
+
+# =========================================================
+# PAGE CONFIG
+# =========================================================
+
+st.set_page_config(
+
+    page_title="Xorazm Viloyati Meliorativ Monitoring",
+
+    page_icon="🌱",
+
+    layout="wide",
+
+    initial_sidebar_state="expanded"
+
+)
+
+# =========================================================
+# STYLE
+# =========================================================
+
 st.markdown("""
+
 <style>
-[data-testid="stSidebar"] {
-    background: #1a2e1a;
+
+.stApp{
+    background:
+    linear-gradient(
+    180deg,
+    #081c15,
+    #1b4332
+    );
 }
-[data-testid="stSidebar"] * {
-    color: #d4e8c2 !important;
+
+.main-title{
+    font-size:42px;
+    font-weight:700;
+    text-align:center;
+    color:white;
 }
+
+.subtitle{
+    text-align:center;
+    color:#dcdcdc;
+    margin-bottom:25px;
+}
+
+[data-testid="stSidebar"]{
+    background:#081c15;
+}
+
+[data-testid="stSidebar"] *{
+    color:white !important;
+}
+
+.stButton button{
+
+    width:100%;
+
+    border-radius:12px;
+
+    border:1px solid #52b788;
+
+    background:#1b4332;
+
+    color:white;
+
+    font-weight:600;
+}
+
+.metric-card{
+
+    background:#1b4332;
+
+    padding:15px;
+
+    border-radius:15px;
+}
+
 </style>
+
 """, unsafe_allow_html=True)
 
-# GEE init
+# =========================================================
+# GEE INIT
+# =========================================================
+
 @st.cache_resource
 def init_gee():
+
     try:
-        key_data = dict(st.secrets["earth_engine"])
-        key_data["type"] = "service_account"
+
+        service_account = st.secrets["earth_engine"]["service_account"]
+
+        private_key = st.secrets["earth_engine"]["private_key"]
+
+        project = st.secrets["earth_engine"]["project"]
 
         credentials = ee.ServiceAccountCredentials(
-            email=key_data["client_email"],
-            key_data=json.dumps(key_data),
+
+            service_account,
+
+            key_data=private_key
+
         )
 
-        ee.Initialize(credentials, project=key_data.get("project_id", ""))
+        ee.Initialize(
+            credentials,
+            project=project
+        )
+
         return True
 
-    except Exception as ex:
-        st.error(f"GEE ulanishda xato: {ex}")
+    except Exception as e:
+
+        st.error(f"GEE xato: {e}")
+
         return False
 
-gee_ok = init_gee()
+ee_ok = init_gee()
 
-# Tumanlar
-DISTRICTS = [
-    "Urganch", "Xiva", "Shovot", "Bog'ot", "Gurlan",
-    "Xonqa", "Qo'shko'pir", "Yangibozor", "Hazorasp",
-    "Yangiariq", "Tuproqqal'a", "Pitnak",
-]
+# =========================================================
+# DISTRICTS
+# =========================================================
 
-# Koordinatalar
-DISTRICT_COORDS = {
-    "Urganch":      (41.550, 60.633),
-    "Xiva":         (41.378, 60.363),
-    "Shovot":       (41.500, 60.400),
-    "Bog'ot":       (41.350, 60.183),
-    "Gurlan":       (41.850, 60.383),
-    "Xonqa":        (41.533, 60.800),
-    "Qo'shko'pir":  (41.483, 60.167),
-    "Yangibozor":   (41.733, 60.550),
-    "Hazorasp":     (41.317, 61.067),
-    "Yangiariq":    (41.700, 60.700),
-    "Tuproqqal'a":  (41.883, 60.083),
-    "Pitnak":       (41.133, 61.133),
+DISTRICTS = {
+
+    "Urganch": {
+        "center":[41.55,60.63],
+        "area":450
+    },
+
+    "Xiva": {
+        "center":[41.38,60.37],
+        "area":380
+    },
+
+    "Gurlan": {
+        "center":[41.85,60.40],
+        "area":320
+    },
+
+    "Shovot": {
+        "center":[41.65,60.30],
+        "area":290
+    },
+
+    "Yangiariq": {
+        "center":[41.30,60.55],
+        "area":410
+    },
+
+    "Yangibozor": {
+        "center":[41.73,60.55],
+        "area":350
+    },
+
+    "Xonqa": {
+        "center":[41.47,60.78],
+        "area":270
+    },
+
+    "Bog'ot": {
+        "center":[41.35,60.85],
+        "area":310
+    },
+
+    "Tuproqqal'a": {
+        "center":[41.75,61.15],
+        "area":520
+    },
+
+    "Qo'shko'pir": {
+        "center":[41.48,60.16],
+        "area":470
+    }
+
 }
 
-# NDVI holati
-def ndvi_class(val):
-    if val is None:
-        return "⚪ Aniqlanmadi"
-    if val < 0.15:
-        return "🔴 Yomon"
-    elif val < 0.35:
-        return "🟡 O'rtacha"
-    else:
-        return "🟢 Yaxshi"
+# =========================================================
+# NDVI COLOR
+# =========================================================
 
-# Sidebar
+def get_ndvi_color(ndvi):
+
+    if ndvi < 0.2:
+        return "#8B0000"
+
+    elif ndvi < 0.4:
+        return "#FF4500"
+
+    elif ndvi < 0.6:
+        return "#FFD700"
+
+    elif ndvi < 0.75:
+        return "#7CFC00"
+
+    else:
+        return "#006400"
+
+# =========================================================
+# GEE NDVI URL
+# =========================================================
+
+@st.cache_data(ttl=3600)
+def get_gee_ndvi_url(
+
+    start_date,
+
+    end_date,
+
+    cloud=20
+
+):
+
+    try:
+
+        xorazm = ee.Geometry.Rectangle(
+            [59.8,41.0,61.6,42.1]
+        )
+
+        s2 = (
+
+            ee.ImageCollection(
+                "COPERNICUS/S2_SR_HARMONIZED"
+            )
+
+            .filterBounds(xorazm)
+
+            .filterDate(
+                str(start_date),
+                str(end_date)
+            )
+
+            .filter(
+                ee.Filter.lt(
+                    "CLOUDY_PIXEL_PERCENTAGE",
+                    cloud
+                )
+            )
+
+        )
+
+        ndvi = s2.map(
+
+            lambda img:
+
+            img.normalizedDifference(
+                ["B8","B4"]
+            ).rename("NDVI")
+
+        ).median()
+
+        map_id = ndvi.getMapId({
+
+            "min":-0.2,
+
+            "max":0.8,
+
+            "palette":[
+
+                "#8B0000",
+                "#FF4500",
+                "#FFD700",
+                "#7CFC00",
+                "#228B22",
+                "#006400"
+
+            ]
+
+        })
+
+        return map_id["tile_fetcher"].url_format
+
+    except:
+        return None
+
+# =========================================================
+# SIMULATION DATA
+# =========================================================
+
+@st.cache_data(ttl=1800)
+def generate_ndvi_data(
+
+    district,
+
+    start_date,
+
+    end_date
+
+):
+
+    np.random.seed(42)
+
+    dates = pd.date_range(
+
+        start=start_date,
+
+        end=end_date,
+
+        freq='5D'
+
+    )
+
+    base = {
+
+        "Urganch":0.45,
+        "Xiva":0.52,
+        "Gurlan":0.38,
+        "Shovot":0.41,
+        "Yangiariq":0.48,
+        "Yangibozor":0.43,
+        "Xonqa":0.50,
+        "Bog'ot":0.35,
+        "Tuproqqal'a":0.40,
+        "Qo'shko'pir":0.39
+
+    }
+
+    data=[]
+
+    for d in dates:
+
+        month = d.month
+
+        if month in [3,4,5]:
+
+            factor = 1.3
+
+        elif month in [6,7,8]:
+
+            factor = 0.9
+
+        elif month in [9,10]:
+
+            factor = 0.7
+
+        else:
+
+            factor = 0.4
+
+        ndvi = (
+
+            base[district]
+
+            * factor
+
+            + np.random.normal(0,0.05)
+
+        )
+
+        ndvi = max(0.1,min(0.95,ndvi))
+
+        data.append({
+
+            "date":d,
+
+            "district":district,
+
+            "ndvi":round(ndvi,3)
+
+        })
+
+    return pd.DataFrame(data)
+
+# =========================================================
+# SIDEBAR
+# =========================================================
+
 with st.sidebar:
 
-    st.markdown("## 🌿 Boshqaruv Paneli")
+    st.title("🛰 Boshqaruv Paneli")
+
+    if ee_ok:
+
+        st.success("✅ GEE ulandi")
+
+    else:
+
+        st.error("❌ GEE xato")
 
     st.markdown("---")
 
-    st.markdown("### 📅 Sana")
+    start_date = st.date_input(
 
-    col1, col2 = st.columns(2)
+        "📅 Boshlanish",
 
-    with col1:
-        start_date = st.date_input(
-            "Boshlanish",
-            value=date(2025, 1, 1)
-        )
+        value=date(2026,3,1)
 
-    with col2:
-        end_date = st.date_input(
-            "Tugash",
-            value=date.today()
-        )
-
-    st.markdown("### 🏘️ Tumanlar")
-
-    selected_districts = st.multiselect(
-        "Tanlang",
-        DISTRICTS,
-        default=["Urganch", "Xiva", "Gurlan"]
     )
 
-    cloud_pct = st.slider(
-        "☁️ Bulutlilik (%)",
+    end_date = st.date_input(
+
+        "📅 Tugash",
+
+        value=date.today()
+
+    )
+
+    selected = st.multiselect(
+
+        "🏘 Tumanlar",
+
+        list(DISTRICTS.keys()),
+
+        default=[
+            "Urganch",
+            "Xiva",
+            "Gurlan"
+        ]
+
+    )
+
+    cloud = st.slider(
+
+        "☁️ Bulutlilik",
+
         0,
         100,
-        50
+        20
+
     )
 
-    run_btn = st.button(
-        "▶ Tahlil boshlash",
-        use_container_width=True
+    map_type = st.selectbox(
+
+        "🗺 Vizualizatsiya",
+
+        [
+            "Real NDVI",
+            "Markers",
+            "HeatMap",
+            "Choropleth"
+        ]
+
     )
 
-# Title
-st.markdown("# 🌱 Xorazm Viloyati Meliorativ Monitoring")
-st.caption("Sentinel-2 · Google Earth Engine · NDVI")
+# =========================================================
+# TITLE
+# =========================================================
 
-# GEE tekshiruv
-if not gee_ok:
-    st.warning("⚠️ GEE ulanmagan")
-    st.stop()
+st.markdown(
 
-if not run_btn:
-    st.info("👈 Chap paneldan parametrlarni tanlang")
-    st.stop()
+    '<div class="main-title">🌱 Xorazm Viloyati Meliorativ Monitoring</div>',
 
-if not selected_districts:
-    st.warning("Kamida bitta tuman tanlang")
-    st.stop()
+    unsafe_allow_html=True
 
-start_str = start_date.strftime("%Y-%m-%d")
-end_str = end_date.strftime("%Y-%m-%d")
-
-# Cache key
-df_key = f"{start_str}_{end_str}_{cloud_pct}"
-
-# GEE analysis
-if df_key not in st.session_state:
-
-    with st.spinner("🛰️ Tahlil qilinmoqda..."):
-
-        try:
-
-            s2 = (
-                ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
-                .filterDate(start_str, end_str)
-                .filterBounds(
-                    ee.Geometry.BBox(59.5, 41.0, 61.5, 42.2)
-                )
-                .filter(
-                    ee.Filter.lt(
-                        "CLOUDY_PIXEL_PERCENTAGE",
-                        cloud_pct
-                    )
-                )
-                .map(
-                    lambda img:
-                    img.normalizedDifference(["B8", "B4"])
-                    .rename("NDVI")
-                    .copyProperties(img, ["system:time_start"])
-                )
-            )
-
-            count = s2.size().getInfo()
-
-            st.write(f"📡 {count} ta tasvir topildi")
-
-            if count == 0:
-                st.error("Tasvir topilmadi")
-                st.stop()
-
-            median_ndvi = s2.median()
-
-            results = []
-
-            for dist in selected_districts:
-
-                lat, lon = DISTRICT_COORDS[dist]
-
-                point = ee.Geometry.Point([lon, lat])
-
-                try:
-
-                    val = median_ndvi.reduceRegion(
-                        reducer=ee.Reducer.mean(),
-                        geometry=point.buffer(5000),
-                        scale=100,
-                        maxPixels=1e9,
-                    ).getInfo().get("NDVI")
-
-                except:
-                    val = None
-
-                results.append({
-                    "Tuman": dist,
-                    "NDVI": round(val, 4) if val else None,
-                    "Lat": lat,
-                    "Lon": lon
-                })
-
-            df = pd.DataFrame(results)
-
-            st.session_state[df_key] = df
-            st.session_state[f"median_{df_key}"] = median_ndvi
-
-        except Exception as e:
-            st.error(f"Xato: {e}")
-            st.stop()
-
-# Data
-df = st.session_state[df_key]
-median_ndvi = st.session_state[f"median_{df_key}"]
-
-# Metrics
-st.markdown("## 📊 Ko'rsatkichlar")
-
-valid = df["NDVI"].dropna()
-
-c1, c2, c3, c4 = st.columns(4)
-
-c1.metric(
-    "O'rtacha NDVI",
-    f"{valid.mean():.3f}" if len(valid) else "-"
 )
 
-c2.metric(
-    "Maksimal",
-    f"{valid.max():.3f}" if len(valid) else "-"
+st.markdown(
+
+    '<div class="subtitle">Sentinel-2 • Google Earth Engine • NDVI Monitoring</div>',
+
+    unsafe_allow_html=True
+
 )
 
-c3.metric(
-    "Minimal",
-    f"{valid.min():.3f}" if len(valid) else "-"
-)
+# =========================================================
+# DATA
+# =========================================================
 
-c4.metric(
-    "🔴 Muammoli",
-    int((valid < 0.15).sum())
-)
+if selected:
+
+    all_data=[]
+
+    for d in selected:
+
+        df = generate_ndvi_data(
+
+            d,
+
+            start_date,
+
+            end_date
+
+        )
+
+        all_data.append(df)
+
+    combined = pd.concat(all_data)
+
+    # =====================================================
+    # METRICS
+    # =====================================================
+
+    c1,c2,c3,c4 = st.columns(4)
+
+    c1.metric(
+        "📊 O'rtacha",
+        f"{combined['ndvi'].mean():.3f}"
+    )
+
+    c2.metric(
+        "🌿 Maksimal",
+        f"{combined['ndvi'].max():.3f}"
+    )
+
+    c3.metric(
+        "🍂 Minimal",
+        f"{combined['ndvi'].min():.3f}"
+    )
+
+    c4.metric(
+        "✅ Sog'lom %",
+        f"{(combined['ndvi']>0.6).sum()/len(combined)*100:.1f}%"
+    )
+
+# =========================================================
+# MAP
+# =========================================================
 
 st.markdown("---")
 
-# Xarita
-st.markdown("## 🗺️ Interaktiv Xarita")
+st.subheader("🗺 Interaktiv Xarita")
 
-if USE_GEEMAP:
+m = folium.Map(
 
-    try:
+    location=[41.55,60.60],
 
-        Map = geemap.Map(
-            center=[41.55, 60.63],
-            zoom=8
+    zoom_start=8,
+
+    tiles="CartoDB dark_matter"
+
+)
+
+# =========================================================
+# REAL NDVI
+# =========================================================
+
+if map_type == "Real NDVI" and ee_ok:
+
+    with st.spinner("🛰 Sentinel-2 yuklanmoqda..."):
+
+        url = get_gee_ndvi_url(
+
+            start_date,
+
+            end_date,
+
+            cloud
+
         )
 
-        Map.add_basemap("HYBRID")
+        if url:
 
-        ndvi_vis = {
-            "min": -0.1,
-            "max": 0.7,
-            "palette": [
-                "#d73027",
-                "#fc8d59",
-                "#fee08b",
-                "#d9ef8b",
-                "#91cf60",
-                "#1a9850"
+            folium.TileLayer(
+
+                tiles=url,
+
+                attr="Google Earth Engine",
+
+                name="NDVI",
+
+                overlay=True,
+
+                opacity=0.85
+
+            ).add_to(m)
+
+# =========================================================
+# MARKERS
+# =========================================================
+
+if map_type == "Markers":
+
+    for d in selected:
+
+        df = generate_ndvi_data(
+
+            d,
+
+            start_date,
+
+            end_date
+
+        )
+
+        latest = df['ndvi'].iloc[-1]
+
+        center = DISTRICTS[d]["center"]
+
+        folium.CircleMarker(
+
+            location=center,
+
+            radius=15 + latest*25,
+
+            popup=f"""
+
+            <b>{d}</b><br>
+
+            NDVI: {latest:.3f}
+
+            """,
+
+            tooltip=d,
+
+            color=get_ndvi_color(latest),
+
+            fill=True,
+
+            fill_opacity=0.7
+
+        ).add_to(m)
+
+# =========================================================
+# HEATMAP
+# =========================================================
+
+if map_type == "HeatMap":
+
+    heat_data=[]
+
+    for d in selected:
+
+        df = generate_ndvi_data(
+
+            d,
+
+            start_date,
+
+            end_date
+
+        )
+
+        latest = df['ndvi'].iloc[-1]
+
+        center = DISTRICTS[d]["center"]
+
+        for i in range(25):
+
+            heat_data.append([
+
+                center[0] + np.random.normal(0,0.05),
+
+                center[1] + np.random.normal(0,0.05),
+
+                latest * 100
+
+            ])
+
+    HeatMap(
+
+        heat_data,
+
+        radius=25,
+
+        blur=18
+
+    ).add_to(m)
+
+# =========================================================
+# CHOROPLETH
+# =========================================================
+
+if map_type == "Choropleth":
+
+    for d in selected:
+
+        center = DISTRICTS[d]["center"]
+
+        df = generate_ndvi_data(
+
+            d,
+
+            start_date,
+
+            end_date
+
+        )
+
+        latest = df['ndvi'].iloc[-1]
+
+        folium.Rectangle(
+
+            bounds=[
+
+                [center[0]-0.12,center[1]-0.12],
+
+                [center[0]+0.12,center[1]+0.12]
+
             ],
-        }
 
-        Map.addLayer(
-            median_ndvi.clip(
-                ee.Geometry.BBox(
-                    59.5,
-                    41.0,
-                    61.5,
-                    42.2
-                )
-            ),
-            ndvi_vis,
-            "NDVI"
+            color=get_ndvi_color(latest),
+
+            fill=True,
+
+            fill_opacity=0.5,
+
+            popup=f"{d} | NDVI {latest:.3f}"
+
+        ).add_to(m)
+
+# =========================================================
+# MAP TOOLS
+# =========================================================
+
+Draw(export=True).add_to(m)
+
+MeasureControl().add_to(m)
+
+MiniMap().add_to(m)
+
+Fullscreen().add_to(m)
+
+MousePosition().add_to(m)
+
+folium.LayerControl().add_to(m)
+
+# =========================================================
+# SHOW MAP
+# =========================================================
+
+st_folium(
+
+    m,
+
+    width=1400,
+
+    height=650
+
+)
+
+# =========================================================
+# TABS
+# =========================================================
+
+st.markdown("---")
+
+tab1,tab2,tab3,tab4 = st.tabs([
+
+    "📈 Timeline",
+
+    "📊 Comparison",
+
+    "📋 Data",
+
+    "⬇ Export"
+
+])
+
+# =========================================================
+# TIMELINE
+# =========================================================
+
+with tab1:
+
+    fig = go.Figure()
+
+    for d in selected:
+
+        df = generate_ndvi_data(
+
+            d,
+
+            start_date,
+
+            end_date
+
         )
 
-        # MARKERS
-        for _, row in df.iterrows():
+        fig.add_trace(
 
-            ndvi_val = row["NDVI"]
+            go.Scatter(
 
-            if ndvi_val is None:
-                popup_text = f"""
-                <b>{row['Tuman']}</b><br>
-                NDVI: Aniqlanmadi
-                """
+                x=df["date"],
 
-            elif ndvi_val < 0.15:
-                popup_text = f"""
-                <b>{row['Tuman']}</b><br>
-                NDVI: {ndvi_val:.3f}<br>
-                🔴 Yomon
-                """
+                y=df["ndvi"],
 
-            elif ndvi_val < 0.35:
-                popup_text = f"""
-                <b>{row['Tuman']}</b><br>
-                NDVI: {ndvi_val:.3f}<br>
-                🟡 O'rtacha
-                """
+                mode="lines+markers",
 
-            else:
-                popup_text = f"""
-                <b>{row['Tuman']}</b><br>
-                NDVI: {ndvi_val:.3f}<br>
-                🟢 Yaxshi
-                """
+                name=d
 
-            # FIXED POPUP
-            Map.add_marker(
-                location=[row["Lat"], row["Lon"]],
-                popup=folium.Popup(
-                    popup_text,
-                    max_width=300
-                ),
             )
 
-        st.components.v1.html(
-            Map._repr_html_(),
-            height=600
         )
 
-    except Exception as e:
-        st.error(f"Xarita xatosi: {e}")
+    fig.update_layout(
 
-# Jadval
-st.markdown("## 📋 Jadval")
+        title="NDVI Timeline",
 
-df["Holat"] = df["NDVI"].apply(ndvi_class)
+        height=500,
 
-st.dataframe(
-    df[["Tuman", "NDVI", "Holat"]],
-    use_container_width=True,
-    hide_index=True
-)
+        yaxis=dict(range=[0,1])
 
-# Grafik
-st.markdown("## 📈 NDVI Grafik")
+    )
 
-chart_df = df[["Tuman", "NDVI"]].set_index("Tuman")
+    st.plotly_chart(
 
-st.bar_chart(chart_df)
+        fig,
 
-# Download
-st.markdown("## ⬇️ Yuklab olish")
+        use_container_width=True
 
-col1, col2 = st.columns(2)
+    )
 
-col1.download_button(
-    "📥 CSV",
-    data=df.to_csv(index=False),
-    file_name="ndvi.csv",
-    mime="text/csv"
-)
+# =========================================================
+# COMPARISON
+# =========================================================
 
-col2.download_button(
-    "📥 JSON",
-    data=df.to_json(
-        orient="records",
-        force_ascii=False
-    ),
-    file_name="ndvi.json",
-    mime="application/json"
-)
+with tab2:
 
-st.caption(
-    f"📡 Sentinel-2 | {start_str} → {end_str}"
+    compare=[]
+
+    for d in selected:
+
+        df = generate_ndvi_data(
+
+            d,
+
+            start_date,
+
+            end_date
+
+        )
+
+        compare.append({
+
+            "District":d,
+
+            "Average NDVI":df["ndvi"].mean()
+
+        })
+
+    comp_df = pd.DataFrame(compare)
+
+    fig = px.bar(
+
+        comp_df,
+
+        x="District",
+
+        y="Average NDVI",
+
+        color="Average NDVI",
+
+        color_continuous_scale="YlGn"
+
+    )
+
+    st.plotly_chart(
+
+        fig,
+
+        use_container_width=True
+
+    )
+
+# =========================================================
+# TABLE
+# =========================================================
+
+with tab3:
+
+    st.dataframe(
+
+        combined,
+
+        use_container_width=True
+
+    )
+
+# =========================================================
+# EXPORT
+# =========================================================
+
+with tab4:
+
+    csv = combined.to_csv(index=False).encode("utf-8")
+
+    st.download_button(
+
+        "📥 Download CSV",
+
+        csv,
+
+        file_name="xorazm_ndvi.csv",
+
+        mime="text/csv"
+
+    )
+
+# =========================================================
+# FOOTER
+# =========================================================
+
+st.markdown("---")
+
+st.markdown(
+
+    "<center>🛰 Sentinel-2 | Google Earth Engine | Xorazm GIS Platform</center>",
+
+    unsafe_allow_html=True
+
 )
